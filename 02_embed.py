@@ -69,19 +69,22 @@ def measure_speed():
         if out.exists():
             continue
         print(f"speed: {e['run_id']} (on {speed_ds})")
-        embedder = systems.build(e["kind"], e["model_id"])
-        emb = embedder.embed_sparse if e["kind"] == "bm25" else embedder.embed
-        r = {
-            "run_id": e["run_id"], "kind": e["kind"], "model_id": e["model_id"],
-            "speed_dataset": speed_ds, "env": e_env,
-            "throughput": speed.throughput(emb, corpus_texts, sp["throughput_batch_sizes"], sp["repeats"]),
-            "query_latency": speed.query_latency(emb, query_texts, sp["query_latency_n"]),
-            "peak_rss": speed.peak_rss_mb(emb, corpus_texts),
-            "cold_start": speed.cold_start(e["kind"], e["model_id"], corpus_texts, sp["coldstart_processes"]),
-        }
-        out.write_text(json.dumps(r, indent=2))
-        tp32 = r["throughput"].get("32", {}).get("median")
-        print(f"  throughput@32={tp32:.0f} docs/s  load={r['cold_start']['model_load']['median']*1000:.0f}ms")
+        try:
+            embedder = systems.build(e["kind"], e["model_id"])  # also warms cache for offline cold-start
+            emb = embedder.embed_sparse if e["kind"] == "bm25" else embedder.embed
+            r = {
+                "run_id": e["run_id"], "kind": e["kind"], "model_id": e["model_id"],
+                "speed_dataset": speed_ds, "env": e_env,
+                "throughput": speed.throughput(emb, corpus_texts, sp["throughput_batch_sizes"], sp["repeats"]),
+                "query_latency": speed.query_latency(emb, query_texts, sp["query_latency_n"]),
+                "peak_rss": speed.peak_rss_mb(emb, corpus_texts),
+                "cold_start": speed.cold_start(e["kind"], e["model_id"], corpus_texts, sp["coldstart_processes"]),
+            }
+            out.write_text(json.dumps(r, indent=2))
+            tp32 = r["throughput"].get("32", {}).get("median")
+            print(f"  throughput@32={tp32:.0f} docs/s  load={r['cold_start']['model_load']['median']*1000:.0f}ms")
+        except Exception as ex:  # one system failing must not abort the multi-hour run
+            print(f"  speed FAILED for {e['run_id']}: {ex}")
 
     # load/size-only models (multilingual): cold-start only, no quality
     for e in manifest.loadonly_specs():
@@ -89,10 +92,14 @@ def measure_speed():
         if out.exists():
             continue
         print(f"speed(loadonly): {e['id']} {e['model']}")
-        r = {"run_id": f"{e['id']}__{e['model']}", "kind": e["kind"], "model_id": e["model_id"],
-             "env": e_env,
-             "cold_start": speed.cold_start(e["kind"], e["model_id"], corpus_texts, sp["coldstart_processes"])}
-        out.write_text(json.dumps(r, indent=2))
+        try:
+            systems.build(e["kind"], e["model_id"])  # warm cache online before the offline cold-start
+            r = {"run_id": f"{e['id']}__{e['model']}", "kind": e["kind"], "model_id": e["model_id"],
+                 "env": e_env,
+                 "cold_start": speed.cold_start(e["kind"], e["model_id"], corpus_texts, sp["coldstart_processes"])}
+            out.write_text(json.dumps(r, indent=2))
+        except Exception as ex:
+            print(f"  loadonly speed FAILED for {e['id']} {e['model']}: {ex}")
 
 
 if __name__ == "__main__":
