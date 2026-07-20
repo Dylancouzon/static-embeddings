@@ -1,0 +1,68 @@
+# Single manifest: systems × models × datasets × batch sizes. Stage scripts read
+# this via manifest.py; they never grow per-combination flags.
+
+[qdrant]
+url = "http://localhost:6333"
+upload_batch = 128
+upload_parallel = 2
+
+[threads]
+# Pinned identically for every system so the V3 "same thread settings" comparison
+# is apples-to-apples (numpy/BLAS for A, onnxruntime for C/D). Recorded in env.
+omp_num_threads = 4
+ort_intra_op = 4
+ort_inter_op = 1
+
+[datasets]
+beir = ["scifact", "nfcorpus", "fiqa"]
+code = ["codesearchnet-python"]
+
+[speed]
+throughput_batch_sizes = [1, 8, 32, 128, 256]
+query_latency_n = 1000
+repeats = 3            # median + IQR over >=3 runs
+coldstart_processes = 5   # warm-cache regime: 5 fresh processes back to back
+
+[models]
+# potion models under test; multilingual is load/size only (no quality workloads)
+"potion-base-8M" = "minishlab/potion-base-8M"
+"potion-retrieval-32M" = "minishlab/potion-retrieval-32M"
+"potion-multilingual-128M" = "minishlab/potion-multilingual-128M"
+
+# Quality + throughput runs. Each row = one embedder producing vectors for a dataset.
+# Baselines carry a fixed model; static candidates (A/B/C) cross the potion models.
+[[runs]]
+id = "BM25"
+kind = "bm25"
+dim = 0                      # sparse
+[[runs]]
+id = "D1"
+kind = "fastembed_dense"
+model = "sentence-transformers/all-MiniLM-L6-v2"
+dim = 384
+[[runs]]
+id = "D2"
+kind = "fastembed_dense"
+model = "BAAI/bge-small-en-v1.5"
+dim = 384
+
+# static candidates × {base-8M, retrieval-32M}; thresholds evaluated on retrieval-32M
+[static]
+systems = ["A", "B", "C"]
+models = ["potion-base-8M", "potion-retrieval-32M"]
+kinds = { A = "static_numpy", B = "model2vec", C = "static_onnx" }
+dims = { "potion-base-8M" = 256, "potion-retrieval-32M" = 512 }
+
+# Hybrid: A (dense) + BM25 (sparse), server-side RRF. Runs per static model.
+[hybrid]
+id = "H"
+dense_system = "A"
+sparse_system = "BM25"
+models = ["potion-base-8M", "potion-retrieval-32M"]
+
+# Load/size-only check (no quality); measured by speed.py cold-start only.
+[loadonly]
+runs = [
+  { id = "A", kind = "static_numpy", model = "potion-multilingual-128M" },
+  { id = "B", kind = "model2vec", model = "potion-multilingual-128M" },
+]

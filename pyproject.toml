@@ -1,0 +1,28 @@
+[project]
+name = "static-embeddings-bench"
+version = "0.1.0"
+description = "Static embeddings viability decision benchmark for fastembed"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets==5.0.0",
+    "fastembed==0.8.0",
+    "huggingface-hub==1.24.0",
+    "model2vec==0.8.2",
+    "numpy==2.4.6",
+    "onnxruntime==1.27.0",
+    "psutil==7.2.2",
+    "qdrant-client==1.18.0",
+    "ranx==0.3.21",
+    "tokenizers==0.23.1",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.per-file-ignores]
+# imports are deliberately placed after the perf_counter marker so they are timed
+"_coldstart_child.py" = ["E402"]

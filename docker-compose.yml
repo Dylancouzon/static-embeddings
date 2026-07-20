@@ -1,0 +1,9 @@
+# Qdrant pinned by digest (not :latest) per CLAUDE.md. Digest resolved on first pull and recorded in results env.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.1@sha256:d122138f76868edba68d36cb0833139c1d1761f00f09e48e61f8314196e6a4c6
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant_storage:/qdrant/storage
