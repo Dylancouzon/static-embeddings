@@ -36,9 +36,13 @@ def _parse_safetensors(path: str) -> tuple[np.ndarray, str]:
     with open(path, "rb") as f:
         header_len = struct.unpack("<Q", f.read(8))[0]
         header = json.loads(f.read(header_len))
+    tensors = [k for k in header if k != "__metadata__"]
     name = "embeddings" if "embeddings" in header else next(
-        k for k, v in header.items()
-        if k != "__metadata__" and len(v["shape"]) == 2)
+        k for k in tensors if len(header[k]["shape"]) == 2)
+    # candidate A only supports a single embedding matrix. A model2vec model carrying
+    # extra tensors (per-token weights) would be silently mis-embedded — fail loud.
+    if tensors != [name]:
+        raise ValueError(f"candidate A supports one embedding tensor only; found {tensors}")
     meta = header[name]
     dtype = {"F32": np.float32, "F16": np.float16, "F64": np.float64}[meta["dtype"]]
     offset = 8 + header_len + meta["data_offsets"][0]
@@ -81,7 +85,10 @@ class StaticNumpy:
         for start in range(0, len(texts), batch_size):
             for ids in self._token_ids(texts[start:start + batch_size]):
                 if ids:
-                    out.append(self.embedding[ids].mean(axis=0))
+                    rows = self.embedding[ids]
+                    if rows.dtype != np.float32:  # F16 matrices: pool in float32
+                        rows = rows.astype(np.float32)
+                    out.append(rows.mean(axis=0))
                 else:
                     out.append(np.zeros(self.dim))
         arr = np.stack(out) if out else np.zeros((0, self.dim))

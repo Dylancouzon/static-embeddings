@@ -7,6 +7,7 @@ Speed:   results/speed/<run_id>.json  (throughput, cold-start, latency, RSS, env
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +45,12 @@ def embed_vectors():
 
 
 def measure_speed():
+    # speed numbers are only comparable under pinned threads; refuse to run unpinned
+    # (a stray standalone call would default ORT to 1 and pollute results/speed/).
+    for var in ("OMP_NUM_THREADS", "ORT_INTRA_OP_THREADS"):
+        if var not in os.environ:
+            raise SystemExit(f"{var} unset — run via run_all.py so threads are pinned "
+                             f"(speed results would be incomparable otherwise).")
     SPD.mkdir(parents=True, exist_ok=True)
     sp = manifest.speed()
     e_env = env.capture()

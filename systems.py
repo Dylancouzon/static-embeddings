@@ -12,7 +12,8 @@ import numpy as np
 class FastembedDense:
     def __init__(self, model: str):
         from fastembed import TextEmbedding
-        self.m = TextEmbedding(model)
+        # pin onnxruntime threads to the same count as A/C so V3 is same-thread
+        self.m = TextEmbedding(model, threads=_ort_threads())
 
     def embed(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
         return np.asarray(list(self.m.embed(texts, batch_size=batch_size)), dtype=np.float32)

@@ -5,6 +5,7 @@ subprocesses (_coldstart_child.py); warm-cache regime only for now (cold-cache p
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -22,18 +23,23 @@ def _stats(xs: list[float]) -> dict:
             "n": len(xs)}
 
 
-def throughput(embed_fn, corpus: list[str], batch_sizes: list[int], repeats: int) -> dict:
-    """docs/sec at each batch size. Embeds a fixed slice so systems are comparable."""
+def throughput(embed_fn, corpus: list[str], batch_sizes: list[int], repeats: int,
+               min_seconds: float = 1.0) -> dict:
+    """docs/sec at each batch size. Each measurement repeats the embed until >=1s
+    elapsed, so the very fast static path isn't dominated by timer/per-call noise
+    (the V3-critical number). Fixed slice so systems are comparable."""
     out = {}
     for bs in batch_sizes:
-        n = min(len(corpus), max(bs * 20, 512))  # enough docs to amortize per-call overhead
+        n = min(len(corpus), max(bs * 20, 512))
         slice_ = corpus[:n]
         runs = []
         for _ in range(repeats):
-            t = time.perf_counter()
-            embed_fn(slice_, batch_size=bs)
-            dt = time.perf_counter() - t
-            runs.append(n / dt)
+            docs, t0, elapsed = 0, time.perf_counter(), 0.0
+            while elapsed < min_seconds:
+                embed_fn(slice_, batch_size=bs)
+                docs += n
+                elapsed = time.perf_counter() - t0
+            runs.append(docs / elapsed)
         out[str(bs)] = _stats(runs)
     return out
 
@@ -67,13 +73,16 @@ def cold_start(kind: str, model_id: str | None, sample_texts: list[str], process
     with tempfile.TemporaryDirectory() as d:
         tf = Path(d) / "texts.json"
         tf.write_text(json.dumps(sample_texts[:64]))
+        # warm-cache regime: files already downloaded, so run children offline -> the
+        # cache_check phase measures local file resolution, not a network HEAD request.
+        child_env = {**os.environ, "HF_HUB_OFFLINE": "1"}
         phases: dict[str, list[float]] = {}
         interp: list[float] = []
         for _ in range(processes):
             launch = time.perf_counter()
             r = subprocess.run(
                 [sys.executable, "_coldstart_child.py", kind, model_id or "-", str(tf)],
-                capture_output=True, text=True)
+                capture_output=True, text=True, env=child_env)
             wall = time.perf_counter() - launch
             if r.returncode != 0:
                 raise RuntimeError(f"coldstart child failed ({kind}/{model_id}):\n{r.stderr[-800:]}")

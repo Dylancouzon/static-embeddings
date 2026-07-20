@@ -25,6 +25,8 @@ def _env() -> dict:
         "ORT_INTER_OP_THREADS": str(t["ort_inter_op"]),
         "OPENBLAS_NUM_THREADS": str(t["omp_num_threads"]),
         "MKL_NUM_THREADS": str(t["omp_num_threads"]),
+        "VECLIB_MAXIMUM_THREADS": str(t["omp_num_threads"]),  # Accelerate (macOS numpy)
+        "NUMEXPR_NUM_THREADS": str(t["omp_num_threads"]),
     })
     return e
 

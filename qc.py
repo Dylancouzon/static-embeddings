@@ -28,18 +28,28 @@ def bulk_upload(c: QdrantClient, name: str, points, batch_size: int, parallel: i
         list(ex.map(lambda b: c.upsert(name, points=b, wait=True), batches))
 
 
+# fastembed Qdrant/bm25 emits TF-only values; IDF is applied server-side, so the
+# sparse index MUST declare modifier=IDF or BM25 scores are term-frequency only.
+_IDF = models.SparseVectorParams(modifier=models.Modifier.IDF)
+
+
+def _recreate(c: QdrantClient, name: str, **kwargs):
+    if c.collection_exists(name):
+        c.delete_collection(name)
+    c.create_collection(name, **kwargs)
+
+
 def recreate_dense(c: QdrantClient, name: str, dim: int):
-    c.recreate_collection(name, vectors_config=models.VectorParams(
+    _recreate(c, name, vectors_config=models.VectorParams(
         size=dim, distance=models.Distance.COSINE))
 
 
 def recreate_sparse(c: QdrantClient, name: str):
-    c.recreate_collection(name, vectors_config={},
-                          sparse_vectors_config={SPARSE: models.SparseVectorParams()})
+    _recreate(c, name, vectors_config={}, sparse_vectors_config={SPARSE: _IDF})
 
 
 def recreate_hybrid(c: QdrantClient, name: str, dim: int):
-    c.recreate_collection(
-        name,
+    _recreate(
+        c, name,
         vectors_config={DENSE: models.VectorParams(size=dim, distance=models.Distance.COSINE)},
-        sparse_vectors_config={SPARSE: models.SparseVectorParams()})
+        sparse_vectors_config={SPARSE: _IDF})

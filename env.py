@@ -34,6 +34,16 @@ def qdrant_digest(compose_path: str = "docker-compose.yml") -> str:
     return "?"
 
 
+def _blas_backend() -> str:
+    # numpy BLAS backend decides which *_NUM_THREADS var actually applies. Accelerate
+    # (macOS default) ignores OMP/OPENBLAS/MKL and honors VECLIB_MAXIMUM_THREADS.
+    try:
+        import numpy as np
+        return np.show_config(mode="dicts")["Build Dependencies"]["blas"]["name"]
+    except Exception:
+        return "?"
+
+
 def capture() -> dict:
     return {
         "chip": _sh(["sysctl", "-n", "machdep.cpu.brand_string"]),
@@ -41,7 +51,9 @@ def capture() -> dict:
         "os": f"{platform.system()} {platform.mac_ver()[0] or platform.release()}",
         "python": platform.python_version(),
         "power": _sh(["pmset", "-g", "batt"]).split("\n")[0][:60],
+        "numpy_blas": _blas_backend(),
         "omp_num_threads": os.environ.get("OMP_NUM_THREADS", "unset"),
+        "veclib_max_threads": os.environ.get("VECLIB_MAXIMUM_THREADS", "unset"),
         "tokenizers_parallelism": os.environ.get("TOKENIZERS_PARALLELISM", "unset"),
         "ort_intra_op": os.environ.get("ORT_INTRA_OP_THREADS", "unset"),
         "ort_inter_op": os.environ.get("ORT_INTER_OP_THREADS", "unset"),

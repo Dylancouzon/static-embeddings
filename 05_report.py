@@ -29,9 +29,9 @@ def ndcg(run_id: str, dataset: str):
 
 
 def beir_avg_ndcg(run_id: str):
+    # require ALL BEIR tracks — a 2/3 average must not render as a confident verdict
     vals = [ndcg(run_id, d) for d in BEIR]
-    vals = [v for v in vals if v is not None]
-    return mean(vals) if vals else None
+    return mean(vals) if all(v is not None for v in vals) else None
 
 
 def speed(run_id: str):
@@ -71,7 +71,7 @@ def thresholds() -> list[str]:
     # V2: retrieval-32M >= 75% MiniLM avg over BEIR
     a_beir = beir_avg_ndcg(f"A__{RET}")
     d1_beir = beir_avg_ndcg("D1")
-    ratio = (a_beir / d1_beir) if (a_beir and d1_beir) else None
+    ratio = (a_beir / d1_beir) if (a_beir is not None and d1_beir) else None
     v2 = (ratio >= 0.75) if ratio is not None else None
     L.append(f"- **V2** (≥75% MiniLM on BEIR): A={fmt(a_beir)} MiniLM={fmt(d1_beir)} "
              f"ratio={fmt(ratio, pct=True)} → {_pf(v2)}")
@@ -79,7 +79,7 @@ def thresholds() -> list[str]:
     # V3: >=20x embed throughput vs fastembed MiniLM @batch32
     a_tp = tp32(f"A__{RET}")
     d1_tp = tp32("D1")
-    speedup = (a_tp / d1_tp) if (a_tp and d1_tp) else None
+    speedup = (a_tp / d1_tp) if (a_tp is not None and d1_tp) else None
     v3 = (speedup >= 20) if speedup is not None else None
     L.append(f"- **V3** (≥20× throughput @32): A={fmt(a_tp)} MiniLM={fmt(d1_tp)} docs/s "
              f"→ {fmt(speedup, suffix='×') if speedup else 'N/A'} {_pf(v3)}")
@@ -90,24 +90,27 @@ def thresholds() -> list[str]:
     a_total = _total_coldstart(s) if s else None
     onnx_totals = [t for t in (_total_coldstart(speed(r)) for r in ("D1", "D2", f"C__{RET}")) if t]
     v4_load = (load_ms <= 200) if load_ms is not None else None
-    v4_total = (a_total < min(onnx_totals)) if (a_total and onnx_totals) else None
-    v4 = (v4_load and v4_total) if (v4_load is not None and v4_total is not None) else v4_load
-    L.append(f"- **V4** (load ≤200ms warm + total < ONNX): load={fmt(load_ms, suffix='ms') if load_ms else 'N/A'} "
+    # "meaningfully under": A total cold-start <= 75% of the fastest ONNX total.
+    # Pre-registered here before results exist; warm-cache regime only (cold pending).
+    v4_total = (a_total <= 0.75 * min(onnx_totals)) if (a_total is not None and onnx_totals) else None
+    v4 = (v4_load and v4_total) if (v4_load is not None and v4_total is not None) else None
+    L.append(f"- **V4** (load ≤200ms warm + total ≤75% ONNX, warm cache): "
+             f"load={fmt(load_ms, suffix='ms') if load_ms else 'N/A'} "
              f"total={fmt(a_total, suffix='s') if a_total else 'N/A'} "
              f"min(ONNX total)={fmt(min(onnx_totals), suffix='s') if onnx_totals else 'N/A'} → {_pf(v4)}")
 
     # Workflow inclusion: hybrid >=90% MiniLM on both tracks
     h_code, h_beir = ndcg(f"H__{RET}", CODE), beir_avg_ndcg(f"H__{RET}")
     d1_code = ndcg("D1", CODE)
-    wf_code = (h_code / d1_code) if (h_code and d1_code) else None
-    wf_beir = (h_beir / d1_beir) if (h_beir and d1_beir) else None
+    wf_code = (h_code / d1_code) if (h_code is not None and d1_code) else None
+    wf_beir = (h_beir / d1_beir) if (h_beir is not None and d1_beir) else None
     wf = (wf_code >= 0.90 and wf_beir >= 0.90) if (wf_code is not None and wf_beir is not None) else None
     L.append(f"- **Workflow** (hybrid ≥90% MiniLM both tracks): code={fmt(wf_code, pct=True)} "
              f"BEIR={fmt(wf_beir, pct=True)} → {_pf(wf)}")
 
     # Approach: A within 10% of B throughput + gate
     b_tp = tp32(f"B__{RET}")
-    within = (a_tp >= 0.9 * b_tp) if (a_tp and b_tp) else None
+    within = (a_tp >= 0.9 * b_tp) if (a_tp is not None and b_tp) else None
     appr = (within and gate_ok) if (within is not None and gate_ok is not None) else None
     L.append(f"- **Approach** (A within 10% of B tput + gate): A={fmt(a_tp)} B={fmt(b_tp)} docs/s "
              f"→ {_pf(appr)}")
@@ -135,7 +138,8 @@ def quality_table() -> list[str]:
 
 def speed_table() -> list[str]:
     import manifest
-    L = ["\n## Speed — throughput (docs/s, median) & cold-start\n",
+    L = ["\n## Speed — throughput (docs/s, median) & cold-start (warm OS cache)\n",
+         "_load(ms) = mmap+tokenizer for A/C, resolution+init for B/D; cache-chk split out for A/C only._\n",
          "| System | tput@1 | tput@32 | tput@256 | load(ms) | cache-chk(ms) | total cold(s) | q p50(ms) |",
          "|---|---|---|---|---|---|---|---|"]
     for e in manifest.embedders():

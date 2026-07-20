@@ -69,7 +69,8 @@ def _fetch_codesearchnet():
     from datasets import load_dataset
     ds = load_dataset("code-search-net/code_search_net", name="python", split="test")
     corpus, queries, qrels = [], [], {}
-    seen_code: dict[str, str] = {}  # code -> doc_id (dedup identical functions)
+    seen_code: set[str] = set()   # docstring-free code (dedup identical functions)
+    seen_ids: set[str] = set()
     for r in ds:
         code = r["func_code_string"]
         doc = r["func_documentation_string"]
@@ -78,11 +79,17 @@ def _fetch_codesearchnet():
         query = _first_paragraph(doc)
         if not query:
             continue
+        # CSN docstrings live verbatim inside func_code_string. Leaving them in makes
+        # the query a substring of its relevant doc -> substring retrieval, not code
+        # search. Strip the docstring so the corpus is docstring-free code.
+        code_text = code.replace(doc, " ").strip()
+        if not code_text or code_text in seen_code:
+            continue
         doc_id = r["func_code_url"]
-        if code in seen_code:
-            continue  # duplicate code -> skip, keeps qrels unambiguous
-        seen_code[code] = doc_id
-        corpus.append({"id": doc_id, "text": code})
+        assert doc_id not in seen_ids, f"duplicate CSN doc_id: {doc_id}"
+        seen_code.add(code_text)
+        seen_ids.add(doc_id)
+        corpus.append({"id": doc_id, "text": code_text})
         qid = f"q{len(queries)}"
         queries.append({"id": qid, "text": query})
         qrels[qid] = {doc_id: 1}
