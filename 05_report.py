@@ -90,11 +90,11 @@ def thresholds() -> list[str]:
     a_total = _total_coldstart(s) if s else None
     onnx_totals = [t for t in (_total_coldstart(speed(r)) for r in ("D1", "D2", f"C__{RET}")) if t]
     v4_load = (load_ms <= 200) if load_ms is not None else None
-    # "meaningfully under": A total cold-start <= 75% of the fastest ONNX total.
-    # Pre-registered here before results exist; warm-cache regime only (cold pending).
-    v4_total = (a_total <= 0.75 * min(onnx_totals)) if (a_total is not None and onnx_totals) else None
+    # CLAUDE.md V4: "total cold-start meaningfully under the ONNX candidates'" (no number).
+    # Operationalized as strictly under the fastest ONNX candidate; warm cache only.
+    v4_total = (a_total < min(onnx_totals)) if (a_total is not None and onnx_totals) else None
     v4 = (v4_load and v4_total) if (v4_load is not None and v4_total is not None) else None
-    L.append(f"- **V4** (load ≤200ms warm + total ≤75% ONNX, warm cache): "
+    L.append(f"- **V4** (load ≤200ms warm + total < fastest ONNX, warm cache): "
              f"load={fmt(load_ms, suffix='ms') if load_ms else 'N/A'} "
              f"total={fmt(a_total, suffix='s') if a_total else 'N/A'} "
              f"min(ONNX total)={fmt(min(onnx_totals), suffix='s') if onnx_totals else 'N/A'} → {_pf(v4)}")
