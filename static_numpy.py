@@ -73,7 +73,11 @@ class StaticNumpy:
         self.unk_token_id = vocab.get(unk) if unk is not None else None
 
     def _token_ids(self, texts: list[str]) -> list[list[int]]:
-        encs = self.tokenizer.encode_batch(texts, add_special_tokens=False)
+        # mirror model2vec: use the Rust fast path when available (~25% faster tokenize)
+        if hasattr(self.tokenizer, "encode_batch_fast"):
+            encs = self.tokenizer.encode_batch_fast(texts, add_special_tokens=False)
+        else:
+            encs = self.tokenizer.encode_batch(texts, add_special_tokens=False)
         if self.unk_token_id is None:
             return [e.ids for e in encs]
         unk = self.unk_token_id
