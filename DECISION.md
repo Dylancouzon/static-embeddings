@@ -1,79 +1,152 @@
-# Static embeddings in fastembed: viability decision
+# Static Embeddings In Fastembed: Decision
 
-**Verdict: no-go.** The best static model (potion-retrieval-32M) loses to BM25 on code search — the workload that motivated the request — and BM25 already ships in fastembed with no download and no dependencies. The technology itself works: static embeds 30× faster than ONNX MiniLM, loads in 26 ms, and clears the general-quality floor (87% of MiniLM on BEIR). It fails on the one job that justified building it.
+**Verdict: no-go.** Do not ship static embeddings in fastembed for the tested
+English and code-retrieval workloads.
+
+`minishlab/potion-retrieval-32M`, the best static model in this benchmark, fails
+the pre-registered viability check: it scores below BM25 on CodeSearchNet Python,
+the workload that motivated the request. BM25 already exists in fastembed,
+downloads nothing, embeds faster, and also beats static on the BEIR tracks.
+
+Static embeddings are not broken. The numpy implementation matches model2vec,
+loads quickly, and embeds about 30x faster than ONNX MiniLM. The issue is that
+static has no first-choice product slot: BM25 wins the cheap path, and dense
+models win the quality path.
 
 ## Scorecard
 
-Thresholds were fixed before any results existed; viability required all of V1–V4. V1 fails, so the verdict is no-go regardless of the rest.
+Viability required all V1-V4 checks. V1 fails, so the shipping decision is no-go.
 
-| Check | Target | Result | Verdict |
-|---|---|---|---|
-| Correctness | numpy port matches model2vec | 3e-8 | pass |
-| V1 | static ≥ BM25 on code | 0.289 vs 0.296 | **fail** |
-| V2 | ≥ 75% of MiniLM on BEIR | 87% | pass |
-| V3 | ≥ 20× MiniLM embed throughput | 30× | pass |
-| V4 | mmap load ≤ 200 ms, cold-start under ONNX | 26 ms, yes | pass |
-| Workflow | hybrid ≥ 90% of MiniLM on both tracks | BEIR 99%, code 65% | **fail** |
+| Check | Requirement | Result | Verdict |
+|---|---|---:|---|
+| Correctness | numpy port matches model2vec | max diff `3e-8` | pass |
+| V1: code search | static >= BM25 | 0.2887 vs 0.2955 | **fail** |
+| V2: BEIR floor | static >= 75% of MiniLM | 87.0% | pass |
+| V3: throughput | static >= 20x MiniLM at batch 32 | 30.3x | pass |
+| V4: startup | mmap load <= 200 ms, total below ONNX | 26 ms, yes | pass |
+| Workflow | static+BM25 >= 90% of MiniLM on BEIR and code | 99.5%, 64.6% | **fail** |
 | Approach | numpy port within 10% of model2vec throughput | 99.7% | pass |
 
-## Why static loses
+## Main Evidence
 
-**Standalone, BM25 wins every track** (NDCG@10):
+NDCG@10, exact Qdrant search:
 
-| Dataset | BM25 | static | MiniLM | bge |
-|---|---|---|---|---|
-| SciFact | 0.683 | 0.638 | 0.624 | 0.720 |
-| NFCorpus | 0.324 | 0.307 | 0.315 | 0.339 |
-| FiQA | 0.243 | 0.190 | 0.366 | 0.385 |
-| Code | 0.296 | 0.289 | 0.555 | 0.674 |
+| Dataset | BM25 | Static | MiniLM | bge-small |
+|---|---:|---:|---:|---:|
+| SciFact | 0.6830 | 0.6378 | 0.6239 | **0.7203** |
+| NFCorpus | 0.3240 | 0.3073 | 0.3148 | **0.3387** |
+| FiQA | 0.2433 | 0.1903 | 0.3663 | **0.3848** |
+| CodeSearchNet Python | 0.2955 | 0.2887 | 0.5547 | **0.6742** |
 
-Static never beats BM25, and trails the dense models by ~2× on code and FiQA. The code gap is small but real — a paired bootstrap over 20k queries puts the 95% interval at [-0.013, -0.001], entirely below zero. Static drops hardest on FiQA, where matching is semantic rather than lexical.
+Static never beats BM25. On the code track, paired bootstrap over 20k queries
+puts static minus BM25 at `[-0.0128, -0.0009]` for the 95% interval, so the small
+gap is still real.
 
-**A code-specific model makes it worse, not better.** The obvious objection is that potion-retrieval-32M is a general-text distillation. So we distilled a code-retrieval teacher — `st-codesearch-distilroberta-base`, fine-tuned on CodeSearchNet — into a static model and re-ran the code track.
+Dense retrieval is in a different tier for code and semantic-heavy data. bge-small
+scores 0.6742 on CodeSearchNet, more than 2x static. MiniLM and bge-small also
+dominate FiQA, where exact lexical overlap is weaker.
 
-| Model on code | Standalone | + BM25 hybrid |
+## Why The Code-Specific Escape Hatch Failed
+
+The obvious objection is that `potion-retrieval-32M` is a general retrieval
+model. We tested that objection by distilling a code-search teacher,
+`flax-sentence-embeddings/st-codesearch-distilroberta-base`, into a static model
+and re-running CodeSearchNet.
+
+| Code model | Standalone | With BM25 |
+|---|---:|---:|
+| BM25 | 0.2955 | - |
+| General static, potion-retrieval-32M | 0.2887 | 0.3585 |
+| Code-teacher static | 0.0556 | 0.2471 |
+
+The code-teacher static model is much worse, and its BM25 hybrid falls below BM25
+alone. This points at a representation limit rather than a missing teacher:
+static embeddings keep one context-free vector per token and average the result.
+Code search depends heavily on composition, ordering, and structure; averaging
+throws too much of that away.
+
+## Hybrid Does Not Rescue The Product Case
+
+NDCG@10:
+
+| System | BEIR avg | CodeSearchNet Python | FiQA |
+|---|---:|---:|---:|
+| BM25 | 0.4168 | 0.2955 | 0.2433 |
+| Static + BM25 | 0.4329 | 0.3585 | 0.2540 |
+| MiniLM + BM25 | 0.4829 | 0.5312 | 0.3804 |
+| bge-small + BM25 | **0.4926** | **0.6033** | 0.3757 |
+
+Static+BM25 is better than BM25 alone, but it does not reach the pre-registered
+workflow bar. It is close on BEIR and far behind on code. If a user can afford a
+dense model, dense hybrid is the stronger default; if they cannot, BM25 is still
+the simpler fast path.
+
+## Recommendation Matrix
+
+| Need | Recommend | Reason |
 |---|---|---|
-| BM25 (incumbent) | 0.296 | — |
-| general potion-retrieval-32M | 0.289 | 0.359 |
-| code-teacher static | 0.056 | 0.247 |
+| Fast local English retrieval | BM25 | Better than static, faster than static, no download |
+| Code search, lowest cost | BM25 | Beats static on the motivating workload |
+| Code search, quality | bge-small or another dense code-capable model | Dense scores roughly 2x static |
+| General retrieval, quality | bge-small | Best standalone and hybrid results here |
+| Semantic-heavy data like FiQA | Dense | Static drops hardest when lexical overlap is weak |
+| No ONNX runtime, no model server, BM25 inadequate | Static only as a niche option | Speed is real, but benchmark support is narrow |
 
-The code teacher is 5× worse standalone, and its hybrid falls below BM25 alone — a weak dense signal drags RRF fusion down. This is a technology ceiling, not a model choice. Distillation keeps one context-free vector per token and averages them; code retrieval lives in composition, which averaging discards. The general model scores higher only because it soft-matches English subwords shared between docstrings and identifier names, and even that loses to BM25's exact matching.
+Static has no recommended default slot for this scope.
 
-**Hybrid does not rescue it** (NDCG@10):
+## If Static Ships Anyway
 
-| System | BEIR avg | Code | FiQA |
-|---|---|---|---|
-| BM25 | 0.417 | 0.296 | 0.243 |
-| static + BM25 | 0.433 | 0.359 | 0.254 |
-| MiniLM + BM25 | 0.483 | 0.531 | 0.380 |
-| bge + BM25 | 0.493 | 0.603 | 0.376 |
+Ship the numpy port, not the model2vec dependency and not the potion ONNX path.
 
-static + BM25 beats BM25 on every track but loses to a dense hybrid everywhere; the stronger dense model (bge) widens the code gap to 0.603 vs 0.359. Static's one edge is cost: static + BM25 matches MiniLM's BEIR average at 30× the throughput with no added dependency. That fits a narrow niche — general text, throughput-bound, no room for onnxruntime — not a benchmark pass.
+Reasons:
 
-## When to use what
+- It matches model2vec on potion models to `3e-8`.
+- It adds no new fastembed runtime dependency beyond numpy, tokenizers, and
+  huggingface-hub.
+- It uses mmap and loads `potion-retrieval-32M` in 26 ms warm-cache.
+- It reaches 99.7% of model2vec throughput at batch 32.
+- The ONNX path is slower and pulls onnxruntime into the static path.
 
-| Need | Use | Why |
-|---|---|---|
-| Code search, local | BM25 | Beats static, no download, no deps |
-| Code search, quality | bge-small | Dense leads by ~2× |
-| General retrieval, quality | bge-small | Highest on every general track |
-| General retrieval, speed first | BM25 | Faster than static, higher BEIR, no download |
-| Semantic-heavy data (FiQA-like) | Dense | Static collapses without context |
+Implementation shape should follow fastembed's sparse model classes, with mmap
+precedent from MiniCOIL. Keep the correctness gate as a required test: static
+tokenization details are easy to get subtly wrong.
 
-Static has no first-choice slot: BM25 sits above it on cost, dense above it on quality.
+Important caveat: the port matches model2vec on potion tokenizers, but the
+code-teacher experiment showed `5.7e-4` max drift on a byte-level BPE tokenizer.
+Do not ship a non-potion static model until tokenizer parity is fixed and gated.
 
-## Implementation, if it ships anyway
+## Untested Cases
 
-Ship the numpy port. It matches model2vec to 3e-8 on potion, adds no dependencies (numpy, tokenizers, huggingface-hub are already fastembed deps), loads by mmap in 26 ms, and reaches 99.7% of model2vec throughput with `encode_batch_fast`. The ONNX path is slower and pulls onnxruntime. Follow `fastembed/sparse/minicoil.py` for mmap and `fastembed/sparse/bm25.py` for the class shape.
+**Cross-lingual retrieval remains open.** BM25 cannot match a query and document
+that share no terms across languages, while a multilingual static model might.
+`potion-multilingual-128M` was measured only for load and size, not quality. A
+separate cross-lingual benchmark would be needed before making a decision for
+that use case.
 
-One caveat for any non-potion model: the port matches model2vec to 3e-8 on potion's tokenizer but drifts 5.7e-4 on a byte-level BPE tokenizer (its `encode_batch_fast` path doesn't reproduce model2vec's BPE tokenization). Ship a non-potion static model only after a tokenizer-parity fix.
+**Cold-cache startup was skipped.** V4 uses warm OS cache measurements. The mmap
+load phase is isolated and comfortably below the threshold, but cold-cache claims
+should not be made from this run.
 
-## What we didn't test
+**NIFE / pynife static models were not tested.** `pynife` (model2vec's author)
+distills a teacher into a static model with a query-focused recipe. Pretrained
+checkpoints exist on Hugging Face under `stephantulkens`, one in model2vec format
+that loads here with no training. Inference is identical to candidate A, so V3/V4
+are unaffected. Worth a cheap re-run on the semantic tracks where static drops
+hardest (FiQA). It will not move the code verdict: the escape-hatch result above
+shows the failure is static's averaging ceiling, which no training recipe removes.
 
-- **Multilingual / cross-lingual retrieval — the one untested case where static could beat BM25.** BM25 matches tokens, so it scores near zero across languages (a French query and English docs share no terms); a multilingual static model embeds both into one space and can match. `potion-multilingual-128M` was loaded for speed/size only. Recommended check before closing the file: potion-multilingual vs BM25 on a cross-lingual set. It is outside the pre-registered English scope, so it needs sign-off and a dataset wired.
-- **Cold-cache startup.** Warm cache only; cold runs skipped.
+## Reproduce And Audit
 
-## Notes
+```bash
+docker compose up -d
+uv sync
+uv run python run_all.py
+```
 
-- Apple M5 Pro, macOS 26.4.1, Qdrant 1.15.1. Every quality number runs through Qdrant with `exact=True`; a local brute-force top-k reproduces the ranking, so scores reflect the model, not the index.
-- Full tables: `results/RESULTS.md`, `results/extra.json`, `results/code_teacher.json`. Reproduce with `run_all.py`.
+Full generated results live in [results/RESULTS.md](results/RESULTS.md). Extra
+checks are in [results/extra.json](results/extra.json),
+[results/code_teacher.json](results/code_teacher.json), and
+[results/correctness.json](results/correctness.json).
+
+Environment for the recorded run: Apple M5 Pro, 24 GB RAM, Darwin 26.4.1,
+Python 3.14.6, Qdrant 1.15.1 pinned by digest, OMP 4, ORT intra-op 4.
