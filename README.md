@@ -13,11 +13,13 @@ Should [fastembed](https://github.com/qdrant/fastembed) ship static embeddings (
 | FiQA | **0.243** | 0.190 |
 | CodeSearchNet (code) | **0.296** | 0.289 |
 
-BM25 wins every track. On code, static's motivating use case, the gap is small but statistically real: a paired bootstrap over 20k queries puts the 95% interval below zero. For code-search quality neither wins anyway. A dense model, bge-small, scores 0.674. Use dense there, not static or BM25.
+BM25 wins every track. On code, static's motivating use case, the gap is small but statistically real: a paired bootstrap over 20k queries puts the 95% interval below zero. Distilling a code-specific teacher into static to test the obvious fix scored *worse* (0.056), because averaging context-free token vectors discards the composition code search needs. For code-search quality neither lexical nor static wins anyway — bge-small (dense) scores 0.674. Use dense there.
+
+One case we did not test could change this: cross-lingual retrieval, where BM25 can't match across languages and a multilingual static model can. It is outside the pre-registered English scope — see [DECISION.md](DECISION.md).
 
 ## Speed and cost
 
-Static's selling point is speed, so this is where it has to win. It does not, against BM25.
+Speed is static's selling point, so this is where it has to win.
 
 | System | Embed throughput (docs/s, batch 32) | Model download |
 |---|---|---|
@@ -25,7 +27,7 @@ Static's selling point is speed, so this is where it has to win. It does not, ag
 | potion-retrieval-32M (static) | 9,121 | 129 MB |
 | MiniLM (ONNX dense) | 301 | 90 MB |
 
-Static embeds 30× faster than an ONNX dense model. That is its real advantage, and it holds. But against BM25, the baseline it has to beat, BM25 embeds faster, downloads nothing, and scores higher on every track. Static is slower, heavier, and less accurate than the free option already in fastembed.
+Static embeds 30× faster than an ONNX dense model — a real, durable advantage. But BM25 is the baseline it has to beat, and BM25 embeds faster, downloads nothing, and scores higher on every track. Against the free option already in fastembed, static is slower, heavier, and less accurate.
 
 ## Methodology
 
