@@ -7,6 +7,8 @@ This repo answers two questions, in order:
 
 It is an internal decision benchmark, not a publication. The deliverable is `DECISION.md` containing: a go/no-go on shipping, a use-case → recommendation matrix ("when to use static vs BM25 vs ONNX dense vs hybrid"), and the implementation choice. The viability verdict may legitimately be "no" — a benchmark that can only say yes is worthless.
 
+> **Status — completed 2026-07-20: NO-GO.** Static embeddings fail V1: significantly worse than BM25 on code search, the motivating use case (0.289 vs 0.296 NDCG@10; paired bootstrap 95% CI excludes zero). V2/V3/V4 pass — the speed (30× throughput) and startup (26 ms mmap load) claims are real and the general-quality floor is met — so the failure is specific to the motivating use case, not the technology. Full verdict + use-case matrix: `DECISION.md`. Numbers: `results/RESULTS.md`, `results/extra.json`. The pre-registered thresholds and plan below are kept verbatim as the record; do not edit them post-hoc. See "Operational notes for future sessions" at the end before re-running.
+
 ## Decision thresholds — pre-registered, read before running anything
 
 These are set before any results exist so the numbers decide, not the narrative. Adjust them only with Dylan's sign-off, never after seeing results they would flip.
@@ -111,3 +113,25 @@ Footprint (per system — this is a shipping decision, not just a speed contest)
 - Correctness gate first, always, after any change to A.
 - The thresholds above are the verdict. If a number surprises you in either direction, check the harness (batching, cache regime, thread settings, exact search actually on) before believing it — then believe it, including when it says "don't ship."
 - Findings go in `DECISION.md` as they firm up; raw numbers stay in `results/`.
+
+## Operational notes for future sessions (post-run, 2026-07-20)
+
+Learned building the harness — saves rediscovering the hard way.
+
+**Running:** `uv run python run_all.py` pins threads, runs the correctness gate as a hard stop, then embed → index → eval → report. Stages are idempotent (cached vectors and per-run JSON are skipped), so a failed run resumes cheaply. Qdrant must be up (`docker compose up -d`). `BENCH_DATASETS=scifact` restricts to one dataset for smoke tests. `extra_measurements.py` holds the follow-up analyses (dense-vs-static hybrid, V1 bootstrap).
+
+**Correctness gate is mandatory and re-run after any change to `static_numpy.py`** — it proved candidate A matches model2vec to 3e-8. Two subtleties that make A==B hold: model2vec's `encode` default truncates at `max_length=512` while A does no truncation, so the oracle must call B with `max_length=None`; and A uses `encode_batch_fast` (as model2vec does) to match throughput.
+
+**Environment gotchas actually hit:**
+- Python 3.14 works — all wheels (onnxruntime, tokenizers, fastembed, model2vec) exist; no need to pin 3.12.
+- This machine's numpy is on **Accelerate**, which ignores `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS`/`MKL_NUM_THREADS`. Also set `VECLIB_MAXIMUM_THREADS` and record the BLAS backend. A's math is gather+mean (no GEMM), so this barely affects V3.
+- `qdrant-client`'s `upload_points(parallel=N)` **segfaults** (fork workers) on macOS + Python 3.14. The harness uses a thread-based uploader (`qc.bulk_upload`) — keep it.
+- Cold-start children run with `HF_HUB_OFFLINE=1` so the `huggingface_hub` cache-check phase measures local resolution, not a network HEAD. Load-only models (multilingual) must be pre-cached first, or the offline child can't find them.
+
+**Data gotchas that would silently corrupt the verdict (both caught by the pre-run review — always run it):**
+- BM25 sparse index needs `SparseVectorParams(modifier=IDF)`; fastembed's `Qdrant/bm25` emits TF-only values, so without IDF the baseline is crippled and V1 passes too easily.
+- CodeSearchNet docstrings sit verbatim inside `func_code_string`; strip them from the corpus or the query becomes a substring of its relevant doc and V1 tests substring matching, not code search.
+
+**Process note:** V1 fails and the pre-registered consequence is "ship nothing." Do not rescue a failed threshold with an unregistered use case or a mid-project threshold change — the final review caught exactly that. The hybrid path is recorded in `DECISION.md` as an unregistered option Dylan declined.
+
+**Still unmeasured:** cold-cache regime (warm-cache only, skipped by choice). V4 uses the "strict under the fastest ONNX total" reading of CLAUDE.md's "meaningfully under."
